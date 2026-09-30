@@ -14,9 +14,67 @@ class PayInvoiceScreen extends StatefulWidget {
   State<PayInvoiceScreen> createState() => _PayInvoiceScreenState();
 }
 
-class _PayInvoiceScreenState extends State<PayInvoiceScreen> {
+class _PayInvoiceScreenState extends State<PayInvoiceScreen> with WidgetsBindingObserver {
   final _service = PaystackPaymentService();
   bool _loading = false;
+  String? _pendingReference;
+  bool _verifyingReturn = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _pendingReference != null) {
+      _verifyReturnedPayment();
+    }
+  }
+
+  Future<void> _verifyReturnedPayment() async {
+    if (_verifyingReturn || _pendingReference == null || !mounted) return;
+    _verifyingReturn = true;
+    try {
+      final result = await _service.verifyPayment(_pendingReference!);
+      if (!mounted) return;
+      if (result.isSuccess) {
+        _pendingReference = null;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text('Payment verified successfully.'),
+          ),
+        );
+        Navigator.of(context).pop(true);
+      } else if (result.status == 'pending') {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text('Payment is still pending. If you completed payment, please wait a moment and return again.'),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.error,
+          content: Text(error.toString().replaceFirst('StateError: ', '')),
+        ),
+      );
+    } finally {
+      _verifyingReturn = false;
+    }
+  }
 
   Future<void> _pay() async {
     if (_loading || widget.invoice.isPaid) return;
@@ -34,11 +92,13 @@ class _PayInvoiceScreenState extends State<PayInvoiceScreen> {
           ),
         );
         Navigator.of(context).pop(true);
-      } else if (result.isCancelled) {
+      } else if (result.status == 'pending' && result.reference != null) {
+        _pendingReference = result.reference;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             behavior: SnackBarBehavior.floating,
-            content: Text('Payment was cancelled. No charge was recorded.'),
+            duration: Duration(seconds: 5),
+            content: Text('Paystack checkout opened. Complete payment in your browser, then return to this app.'),
           ),
         );
       } else {
